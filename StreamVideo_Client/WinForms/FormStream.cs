@@ -1,9 +1,11 @@
-﻿using StreamVideo_Cliennt.Network;
-using StreamVideo_Client.Network;
+﻿using StreamVideo_Client.Network;
 using System;
 using System.Drawing;
+using System.Drawing.Imaging; // [Mới] Để xử lý ảnh
 using System.IO;
 using System.Windows.Forms;
+using AForge.Video;           // [Mới] Webcam
+using AForge.Video.DirectShow;// [Mới] Webcam
 
 namespace StreamVideo_Client.WinForms
 {
@@ -17,25 +19,74 @@ namespace StreamVideo_Client.WinForms
         private bool _dangGhiHinh = true;
         private string _folderLuu;
 
+        // [Mới] Biến Webcam
+        private FilterInfoCollection _filterInfoCollection;
+        private VideoCaptureDevice _videoCaptureDevice;
+
         public FormStream(TcpClientManager clientManager)
         {
             _clientManager = clientManager;
             InitUI();
 
-            // Đăng ký sự kiện
+            // Khởi động Webcam ngay khi vào phòng
+            StartWebcam();
+
+            // Đăng ký sự kiện nhận ảnh từ người khác
             _clientManager.OnVideoFrameReceived += HienThiAnh;
+        }
+
+        // [Mới] Hàm khởi động Webcam
+        private void StartWebcam()
+        {
+            try
+            {
+                _filterInfoCollection = new FilterInfoCollection(FilterCategory.VideoInputDevice);
+                if (_filterInfoCollection.Count > 0)
+                {
+                    // Lấy camera đầu tiên tìm thấy
+                    _videoCaptureDevice = new VideoCaptureDevice(_filterInfoCollection[0].MonikerString);
+                    _videoCaptureDevice.NewFrame += Video_NewFrame; // Gắn hàm xử lý
+                    _videoCaptureDevice.Start();
+                }
+                else
+                {
+                    MessageBox.Show("Không tìm thấy Camera!", "Lỗi");
+                }
+            }
+            catch (Exception ex) { MessageBox.Show("Lỗi bật cam: " + ex.Message); }
+        }
+
+        // [Mới] Xử lý khi Webcam chụp được 1 khung hình -> Gửi đi
+        private void Video_NewFrame(object sender, NewFrameEventArgs eventArgs)
+        {
+            try
+            {
+                using (Bitmap frame = (Bitmap)eventArgs.Frame.Clone())
+                {
+                    // Resize về 640x480 cho nhẹ mạng
+                    using (Bitmap resized = new Bitmap(frame, new Size(640, 480)))
+                    {
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            resized.Save(ms, ImageFormat.Jpeg);
+                            byte[] imgData = ms.ToArray();
+
+                            // GỬI LÊN SERVER (Gửi ảnh gốc, chưa mã hóa)
+                            // Server sẽ lo việc mã hóa AES khi gửi lại cho người khác
+                            _clientManager.SendVideoFrame(imgData);
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private void InitUI()
         {
-            // Tạo thư mục lưu video
-            // Mới: Lưu vào thư mục chứa file chạy (.exe) của Client
             string folderGoc = Application.StartupPath;
-            // Tạo thư mục con "Recordings"
             _folderLuu = Path.Combine(folderGoc, "Recordings", DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
             Directory.CreateDirectory(_folderLuu);
 
-            // Cấu hình Form
             this.Text = "Phòng họp trực tuyến - Đang Ghi Hình...";
             this.BackColor = Color.FromArgb(32, 33, 36);
             this.WindowState = FormWindowState.Maximized;
@@ -54,7 +105,6 @@ namespace StreamVideo_Client.WinForms
             _pbServerScreen.BorderStyle = BorderStyle.FixedSingle;
             _videoGrid.Controls.Add(_pbServerScreen);
 
-            // Nút Kết thúc
             Panel pnlBottom = new Panel();
             pnlBottom.Dock = DockStyle.Bottom;
             pnlBottom.Height = 80;
@@ -71,46 +121,35 @@ namespace StreamVideo_Client.WinForms
             pnlBottom.Controls.Add(btnEnd);
         }
 
+        // Hàm hiển thị ảnh NHẬN ĐƯỢC từ người khác
         private void HienThiAnh(byte[] imgData)
         {
             try
             {
-                // Nếu đang ở thread khác thì gọi về thread UI
                 if (InvokeRequired) { Invoke(new Action<byte[]>(HienThiAnh), imgData); return; }
 
-                // --- BƯỚC 1: GIẢI MÃ DỮ LIỆU ---
-                // Dữ liệu nhận về (imgData) đang bị mã hóa, phải giải mã ra mới xem được
-                byte[] decryptedData = SecurityHelper.Decrypt(imgData);
+                // --- ĐÃ SỬA: BỎ GIẢI MÃ THỪA ---
+                // Trước đây có dòng SecurityHelper.Decrypt(imgData) -> Đã xóa.
+                // Vì TcpClientManager đã giải mã bằng AesHelper rồi, nên imgData ở đây là ảnh sạch.
 
-                // Kiểm tra giải mã thành công (khác null)
-                if (decryptedData != null)
+                if (imgData != null)
                 {
-                    // --- BƯỚC 2: HIỂN THỊ LÊN MÀN HÌNH ---
-                    using (MemoryStream ms = new MemoryStream(decryptedData))
+                    using (MemoryStream ms = new MemoryStream(imgData))
                     {
                         Image newImg = Image.FromStream(ms);
-
-                        // Xử lý ảnh cũ để tránh đầy bộ nhớ
                         Image oldImg = _pbServerScreen.Image;
                         _pbServerScreen.Image = newImg;
                         if (oldImg != null) oldImg.Dispose();
                     }
 
-                    // --- BƯỚC 3: LƯU HÌNH ẢNH (ĐÃ GIẢI MÃ) ---
                     if (_dangGhiHinh)
                     {
                         string filename = Path.Combine(_folderLuu, $"Frame_{DateTime.Now.Ticks}.jpg");
-
-                        // Lưu cái mảng byte ĐÃ GIẢI MÃ (decryptedData) thì mở file mới xem được
-                        // Đừng lưu imgData gốc vì nó là rác mã hóa
-                        File.WriteAllBytesAsync(filename, decryptedData);
+                        File.WriteAllBytesAsync(filename, imgData);
                     }
                 }
             }
-            catch
-            {
-                // Có thể bỏ qua lỗi nếu giải mã sai gói tin hoặc form đang đóng
-            }
+            catch { }
         }
 
         private void BtnEnd_Click(object sender, EventArgs e)
@@ -122,6 +161,12 @@ namespace StreamVideo_Client.WinForms
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // [Mới] Tắt Webcam khi đóng form
+            if (_videoCaptureDevice != null && _videoCaptureDevice.IsRunning)
+            {
+                _videoCaptureDevice.SignalToStop();
+            }
+
             base.OnFormClosing(e);
             if (_clientManager != null)
             {

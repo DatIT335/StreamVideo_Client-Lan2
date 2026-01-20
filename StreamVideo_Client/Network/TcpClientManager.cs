@@ -1,5 +1,5 @@
 ﻿using StreamVideo_Client.DTO;
-using StreamVideo_Client.Common; // Đảm bảo đã có file AesHelper.cs
+using StreamVideo_Client.Common;
 using System;
 using System.IO;
 using System.Net.Sockets;
@@ -8,7 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Net.Security;
 using NAudio.Wave;
-using System.Diagnostics; // Thêm cái này để ghi Debug log
+using System.Diagnostics;
 
 namespace StreamVideo_Client.Network
 {
@@ -36,14 +36,14 @@ namespace StreamVideo_Client.Network
                 _client = new TcpClient();
                 _client.Connect(ip, port);
 
-                // Bỏ qua check SSL (Dùng cho Self-Signed Certificate)
+                // Bỏ qua check SSL
                 _sslStream = new SslStream(_client.GetStream(), false, (s, c, ch, e) => true);
                 _sslStream.AuthenticateAsClient("StreamServer");
 
                 _reader = new BinaryReader(_sslStream);
                 _writer = new BinaryWriter(_sslStream);
 
-                // Setup Loa (Speaker)
+                // Setup Loa
                 _waveProvider = new BufferedWaveProvider(new WaveFormat(44100, 1));
                 _waveOut = new WaveOutEvent();
                 _waveOut.Init(_waveProvider);
@@ -67,7 +67,6 @@ namespace StreamVideo_Client.Network
             {
                 while (_client.Connected)
                 {
-                    // Đọc Header gói tin
                     int length = _reader.ReadInt32();
                     byte type = _reader.ReadByte();
                     byte[] payload = _reader.ReadBytes(length);
@@ -79,19 +78,18 @@ namespace StreamVideo_Client.Network
                         _lastLoginResult = res.ThanhCong;
                         _loginWaitHandle.Set();
                     }
-                    else if (type == 2) // VIDEO FRAME
+                    else if (type == 2) // VIDEO FRAME (NHẬN TỪ SERVER)
                     {
                         try
                         {
-                            // --- QUAN TRỌNG: GIẢI MÃ AES ---
+                            // --- GIỮ LẠI LỚP GIẢI MÃ NÀY (Single Encryption) ---
+                            // Đây là lớp bảo mật duy nhất, không được xóa!
                             byte[] decryptedImage = AesHelper.Decrypt(payload);
 
-                            // Gửi dữ liệu ảnh sạch ra Form để hiển thị
                             OnVideoFrameReceived?.Invoke(decryptedImage);
                         }
                         catch (Exception ex)
                         {
-                            // Nếu nhảy vào đây nghĩa là Key/IV của Server và Client không khớp nhau!
                             Debug.WriteLine("Lỗi giải mã Video: " + ex.Message);
                         }
                     }
@@ -110,6 +108,16 @@ namespace StreamVideo_Client.Network
             }
         }
 
+        // --- [MỚI] HÀM GỬI VIDEO LÊN SERVER ---
+        public void SendVideoFrame(byte[] data)
+        {
+            if (_client != null && _client.Connected)
+            {
+                // Gửi Type 2 (Video). Gửi ảnh gốc (Raw), Server sẽ tự lo việc mã hóa khi Broadcast.
+                GuiDuLieu(2, data);
+            }
+        }
+
         public bool Login(string user, string pass)
         {
             if (_client == null || !_client.Connected) return false;
@@ -121,8 +129,6 @@ namespace StreamVideo_Client.Network
             };
 
             GuiDuLieu(1, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(req)));
-
-            // Chờ phản hồi tối đa 3 giây
             _loginWaitHandle.WaitOne(3000);
             return _lastLoginResult;
         }
