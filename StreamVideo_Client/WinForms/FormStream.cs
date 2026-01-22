@@ -15,23 +15,30 @@ namespace StreamVideo_Client.WinForms
         private FlowLayoutPanel _videoGrid;
         private PictureBox _pbServerScreen;
 
+        // Các nút điều khiển
+        private Button btnMic, btnCam, btnEnd;
+
         // Webcam
         private FilterInfoCollection _filterInfoCollection;
         private VideoCaptureDevice _videoCaptureDevice;
 
-        // Biến lưu trữ
+        // Biến trạng thái
         private bool _dangGhiHinh = true;
         private string _folderLuu;
+
+        // --- TRẠNG THÁI MIC/CAM MỚI ---
+        private bool _isMicOn = true;
+        private bool _isCamOn = true;
 
         public FormStream(TcpClientManager clientManager)
         {
             _clientManager = clientManager;
-            InitUI();
 
-            // 1. Tự bật Webcam của mình
+            // Cấu hình giao diện và Webcam
+            InitUI();
             StartWebcam();
 
-            // 2. Đăng ký nhận ảnh từ người khác
+            // Đăng ký nhận ảnh từ Server
             _clientManager.OnVideoFrameReceived += HienThiAnh;
         }
 
@@ -50,20 +57,50 @@ namespace StreamVideo_Client.WinForms
             catch { MessageBox.Show("Không tìm thấy Camera!"); }
         }
 
-        // Gửi ảnh gốc lên Server
+        // --- GỬI ẢNH LÊN SERVER ---
+        // Thay thế hàm Video_NewFrame cũ bằng hàm này:
         private void Video_NewFrame(object sender, NewFrameEventArgs eventArgs)
         {
             try
             {
+                // Clone ảnh ra để xử lý (tránh lỗi bộ nhớ)
                 using (Bitmap frame = (Bitmap)eventArgs.Frame.Clone())
                 {
-                    using (Bitmap resized = new Bitmap(frame, new Size(640, 480)))
+                    // --- 1. HIỂN THỊ HÌNH (LOCAL PREVIEW) - PHẢI DÙNG INVOKE ---
+                    if (_pbServerScreen.InvokeRequired)
                     {
-                        using (MemoryStream ms = new MemoryStream())
+                        _pbServerScreen.Invoke(new Action(() =>
                         {
-                            resized.Save(ms, ImageFormat.Jpeg);
-                            // GỬI LÊN SERVER (TcpClientManager đã có hàm này rồi)
-                            _clientManager.SendVideoFrame(ms.ToArray());
+                            if (_isCamOn)
+                            {
+                                Image old = _pbServerScreen.Image;
+                                _pbServerScreen.Image = (Bitmap)frame.Clone();
+                                if (old != null) old.Dispose();
+                            }
+                            else
+                            {
+                                _pbServerScreen.Image = null; // Tắt cam thì hiện đen
+                            }
+                        }));
+                    }
+                    else
+                    {
+                        // Trường hợp hiếm (đã ở UI thread)
+                        if (_isCamOn) _pbServerScreen.Image = (Bitmap)frame.Clone();
+                        else _pbServerScreen.Image = null;
+                    }
+
+                    // --- 2. GỬI LÊN SERVER ---
+                    // Chỉ gửi khi Cam đang bật
+                    if (_isCamOn)
+                    {
+                        using (Bitmap resized = new Bitmap(frame, new Size(640, 480)))
+                        {
+                            using (MemoryStream ms = new MemoryStream())
+                            {
+                                resized.Save(ms, ImageFormat.Jpeg);
+                                _clientManager.SendVideoFrame(ms.ToArray());
+                            }
                         }
                     }
                 }
@@ -71,7 +108,7 @@ namespace StreamVideo_Client.WinForms
             catch { }
         }
 
-        // Hiển thị ảnh nhận được (ĐÃ BỎ GIẢI MÃ THỪA)
+        // --- HIỂN THỊ ẢNH TỪ SERVER ---
         private void HienThiAnh(byte[] imgData)
         {
             try
@@ -82,25 +119,25 @@ namespace StreamVideo_Client.WinForms
                 {
                     using (MemoryStream ms = new MemoryStream(imgData))
                     {
-                        Image newImg = Image.FromStream(ms); // Dùng thẳng imgData sạch
+                        Image newImg = Image.FromStream(ms);
                         Image oldImg = _pbServerScreen.Image;
                         _pbServerScreen.Image = newImg;
                         if (oldImg != null) oldImg.Dispose();
                     }
+
+                    // Logic ghi hình cũ của m
                     if (_dangGhiHinh)
                     {
-                        // Tạo tên file theo thời gian thực (để không bị trùng)
                         string filename = Path.Combine(_folderLuu, $"Frame_{DateTime.Now.Ticks}.jpg");
-
-                        // Lưu dữ liệu ảnh xuống ổ cứng
-                        File.WriteAllBytesAsync(filename, imgData);
+                        // Lưu ý: WriteAllBytesAsync cần .NET Core hoặc .NET 5+, nếu lỗi m đổi thành WriteAllBytes thường nhé
+                        File.WriteAllBytes(filename, imgData);
                     }
                 }
             }
             catch { }
         }
 
-        // --- CÁC HÀM GIAO DIỆN CŨ (GIỮ NGUYÊN) ---
+        // --- GIAO DIỆN (ĐÃ NÂNG CẤP THÊM NÚT) ---
         private void InitUI()
         {
             string folderGoc = Application.StartupPath;
@@ -116,28 +153,98 @@ namespace StreamVideo_Client.WinForms
             this.Controls.Add(_videoGrid);
 
             _pbServerScreen = new PictureBox();
-            _pbServerScreen.Width = 800;
+            _pbServerScreen.Width = 800; // Có thể chỉnh to hơn nếu muốn
             _pbServerScreen.Height = 450;
             _pbServerScreen.BackColor = Color.Black;
             _pbServerScreen.SizeMode = PictureBoxSizeMode.Zoom;
             _pbServerScreen.BorderStyle = BorderStyle.FixedSingle;
             _videoGrid.Controls.Add(_pbServerScreen);
 
-            // Nút Kết thúc
+            // --- THANH ĐIỀU KHIỂN BÊN DƯỚI ---
             Panel pnlBottom = new Panel();
             pnlBottom.Dock = DockStyle.Bottom;
             pnlBottom.Height = 80;
             pnlBottom.BackColor = Color.FromArgb(20, 20, 20);
             this.Controls.Add(pnlBottom);
 
-            Button btnEnd = new Button();
+            // Tính vị trí giữa màn hình
+            int centerX = Screen.PrimaryScreen.Bounds.Width / 2;
+            int btnY = 20;
+
+            // 1. Nút LOA (Bên trái)
+            btnMic = new Button();
+            btnMic.Text = "🔊 TẮT MIC";
+            btnMic.BackColor = Color.FromArgb(60, 64, 67); // Màu xám
+            btnMic.ForeColor = Color.White;
+            btnMic.Size = new Size(120, 40);
+            btnMic.Location = new Point(centerX - 200, btnY);
+            btnMic.FlatStyle = FlatStyle.Flat;
+            btnMic.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            btnMic.Click += BtnMic_Click;
+            pnlBottom.Controls.Add(btnMic);
+
+            // 2. Nút KẾT THÚC (Ở giữa - Giữ nguyên của m)
+            btnEnd = new Button();
             btnEnd.Text = "KẾT THÚC";
-            btnEnd.BackColor = Color.Red;
+            btnEnd.BackColor = Color.FromArgb(220, 53, 69); // Màu đỏ
             btnEnd.ForeColor = Color.White;
             btnEnd.Size = new Size(120, 40);
-            btnEnd.Location = new Point((Screen.PrimaryScreen.Bounds.Width / 2) - 60, 20);
+            btnEnd.Location = new Point(centerX - 60, btnY);
+            btnEnd.FlatStyle = FlatStyle.Flat;
+            btnEnd.Font = new Font("Segoe UI", 10, FontStyle.Bold);
             btnEnd.Click += BtnEnd_Click;
             pnlBottom.Controls.Add(btnEnd);
+
+            // 3. Nút CAM (Bên phải)
+            btnCam = new Button();
+            btnCam.Text = "📷 TẮT CAM";
+            btnCam.BackColor = Color.FromArgb(60, 64, 67);
+            btnCam.ForeColor = Color.White;
+            btnCam.Size = new Size(120, 40);
+            btnCam.Location = new Point(centerX + 80, btnY);
+            btnCam.FlatStyle = FlatStyle.Flat;
+            btnCam.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            btnCam.Click += BtnCam_Click;
+            pnlBottom.Controls.Add(btnCam);
+        }
+
+        // --- XỬ LÝ SỰ KIỆN NÚT BẤM ---
+
+        private void BtnMic_Click(object sender, EventArgs e)
+        {
+            _isMicOn = !_isMicOn; // Đảo trạng thái
+
+            if (_isMicOn)
+            {
+                btnMic.Text = "🔊 TẮT MIC";
+                btnMic.BackColor = Color.FromArgb(60, 64, 67);
+                // Ở đây m cần thêm logic bật Audio trong TcpClientManager nếu có
+            }
+            else
+            {
+                btnMic.Text = "🔇 BẬT MIC";
+                btnMic.BackColor = Color.FromArgb(220, 53, 69); // Đỏ cảnh báo
+                // Ở đây m cần thêm logic tắt Audio
+            }
+
+            // Cập nhật trạng thái cho ClientManager biết (Nếu m đã code phần Audio)
+            _clientManager.IsMicEnabled = _isMicOn;
+        }
+
+        private void BtnCam_Click(object sender, EventArgs e)
+        {
+            _isCamOn = !_isCamOn; // Đảo trạng thái
+
+            if (_isCamOn)
+            {
+                btnCam.Text = "📷 TẮT CAM";
+                btnCam.BackColor = Color.FromArgb(60, 64, 67);
+            }
+            else
+            {
+                btnCam.Text = "🚫 BẬT CAM";
+                btnCam.BackColor = Color.FromArgb(220, 53, 69);
+            }
         }
 
         private void BtnEnd_Click(object sender, EventArgs e)
@@ -150,8 +257,9 @@ namespace StreamVideo_Client.WinForms
         {
             if (_videoCaptureDevice != null && _videoCaptureDevice.IsRunning)
                 _videoCaptureDevice.SignalToStop();
-            base.OnFormClosing(e);
+
             _clientManager.Disconnect();
+            base.OnFormClosing(e);
         }
     }
 }
