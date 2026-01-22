@@ -119,7 +119,7 @@ namespace StreamVideo_Client.WinForms
                 {
                     using (MemoryStream ms = new MemoryStream(imgData))
                     {
-                        Image newImg = Image.FromStream(ms);
+                        Image newImg = Image.FromStream(ms); 
                         Image oldImg = _pbServerScreen.Image;
                         _pbServerScreen.Image = newImg;
                         if (oldImg != null) oldImg.Dispose();
