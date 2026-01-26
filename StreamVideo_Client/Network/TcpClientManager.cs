@@ -20,7 +20,7 @@ namespace StreamVideo_Client.Network
         private BinaryWriter _writer;
         private Thread _listenThread;
 
-        public event Action<byte[]> OnVideoFrameReceived;
+        public event Action<string, byte[]> OnVideoFrameReceived;
 
         // --- ÂM THANH (LOA & MIC) ---
         private BufferedWaveProvider _waveProvider; // Để phát loa
@@ -122,9 +122,24 @@ namespace StreamVideo_Client.Network
                     {
                         try
                         {
-                            // Giải mã AES
-                            byte[] decryptedImage = AesHelper.Decrypt(payload);
-                            OnVideoFrameReceived?.Invoke(decryptedImage);
+                            using (MemoryStream ms = new MemoryStream(payload))
+                            using (BinaryReader br = new BinaryReader(ms))
+                            {
+                                // A. Đọc độ dài tên (4 byte đầu)
+                                int nameLen = br.ReadInt32();
+
+                                // B. Đọc tên người gửi
+                                byte[] nameBytes = br.ReadBytes(nameLen);
+                                string senderName = Encoding.UTF8.GetString(nameBytes);
+
+                                // C. Đọc dữ liệu ảnh (phần còn lại)
+                                int imageLen = (int)(ms.Length - ms.Position);
+                                byte[] videoCipher = br.ReadBytes(imageLen);
+
+                                // D. Giải mã và bắn Event kèm Tên
+                                byte[] decryptedImage = AesHelper.Decrypt(videoCipher);
+                                OnVideoFrameReceived?.Invoke(senderName, decryptedImage);
+                            }
                         }
                         catch { }
                     }

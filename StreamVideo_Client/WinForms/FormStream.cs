@@ -11,6 +11,8 @@ namespace StreamVideo_Client.WinForms
 {
     public partial class FormStream : Form
     {
+        // Thêm vào đầu class FormStream
+        private Dictionary<string, PictureBox> _clientScreens = new Dictionary<string, PictureBox>();
         private TcpClientManager _clientManager;
         private FlowLayoutPanel _videoGrid;
         private PictureBox _pbServerScreen;
@@ -109,29 +111,68 @@ namespace StreamVideo_Client.WinForms
         }
 
         // --- HIỂN THỊ ẢNH TỪ SERVER ---
-        private void HienThiAnh(byte[] imgData)
+        // [FormStream.cs]
+
+        // Hàm nhận thêm tham số senderName
+        private void HienThiAnh(string senderName, byte[] imgData)
         {
             try
             {
-                if (InvokeRequired) { Invoke(new Action<byte[]>(HienThiAnh), imgData); return; }
-
-                if (imgData != null)
+                // Bắt buộc Invoke để thao tác UI
+                if (InvokeRequired)
                 {
-                    using (MemoryStream ms = new MemoryStream(imgData))
+                    Invoke(new Action<string, byte[]>(HienThiAnh), senderName, imgData);
+                    return;
+                }
+
+                if (imgData == null) return;
+
+                PictureBox targetBox = null;
+
+                // 1. Nếu là Server gửi -> Hiện lên màn hình to chính giữa
+                if (senderName == "Server")
+                {
+                    targetBox = _pbServerScreen;
+                }
+                // 2. Nếu là Client khác gửi
+                else
+                {
+                    // Kiểm tra xem đã có ô cho người này chưa
+                    if (!_clientScreens.ContainsKey(senderName))
                     {
-                        Image newImg = Image.FromStream(ms); 
-                        Image oldImg = _pbServerScreen.Image;
-                        _pbServerScreen.Image = newImg;
-                        if (oldImg != null) oldImg.Dispose();
+                        // Chưa có -> Tạo ô mới
+                        PictureBox newBox = new PictureBox();
+                        newBox.Size = new Size(200, 150); // Kích thước ô nhỏ
+                        newBox.SizeMode = PictureBoxSizeMode.Zoom;
+                        newBox.BackColor = Color.Black;
+                        newBox.BorderStyle = BorderStyle.FixedSingle;
+                        newBox.Margin = new Padding(5);
+
+                        // Hiển thị tên người dùng đè lên góc
+                        Label lblName = new Label();
+                        lblName.Text = senderName;
+                        lblName.ForeColor = Color.Yellow;
+                        lblName.BackColor = Color.Transparent;
+                        lblName.Parent = newBox;
+                        lblName.Location = new Point(5, 5);
+
+                        // Thêm vào FlowLayoutPanel (_videoGrid)
+                        _videoGrid.Controls.Add(newBox);
+
+                        // Lưu vào danh sách để dùng lại lần sau
+                        _clientScreens.Add(senderName, newBox);
                     }
 
-                    // Logic ghi hình cũ của m
-                    if (_dangGhiHinh)
-                    {
-                        string filename = Path.Combine(_folderLuu, $"Frame_{DateTime.Now.Ticks}.jpg");
-                        // Lưu ý: WriteAllBytesAsync cần .NET Core hoặc .NET 5+, nếu lỗi m đổi thành WriteAllBytes thường nhé
-                        File.WriteAllBytes(filename, imgData);
-                    }
+                    // Lấy ô đã có
+                    targetBox = _clientScreens[senderName];
+                }
+
+                // 3. Hiển thị ảnh lên ô đã xác định
+                using (MemoryStream ms = new MemoryStream(imgData))
+                {
+                    Image oldImg = targetBox.Image;
+                    targetBox.Image = Image.FromStream(ms);
+                    if (oldImg != null) oldImg.Dispose(); // Giải phóng RAM
                 }
             }
             catch { }
