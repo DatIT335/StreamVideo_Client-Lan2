@@ -9,16 +9,5 @@ namespace StreamVideo_Client.DTO
         public string TenDangNhap { get; set; }
         public string MatKhau { get; set; }
     }
-    public enum RequestType
-    {
-        LOGIN,
-        STREAM,
-        LOGOUT
-    }
-    public class BaseRequestDTO
-    {
-        public RequestType Type { get; set; }
-        public string Payload { get; set; }
-    }
 }
 

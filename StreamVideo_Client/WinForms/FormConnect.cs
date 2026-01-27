@@ -135,8 +135,11 @@ namespace StreamVideo_Client.WinForms
         // --- Logic Đăng Ký ---
         private void BtnRegister_Click(object sender, EventArgs e)
         {
-            // Tạm thời hiện thông báo, sau này sẽ mở FormRegister
-            MessageBox.Show("Tính năng đăng ký đang được phát triển!\nVui lòng liên hệ Admin để cấp tài khoản.", "Thông báo");
+            // Code cũ của m đang là: MessageBox.Show("Tính năng đang phát triển...");
+            // XÓA NÓ ĐI VÀ THAY BẰNG 2 DÒNG NÀY:
+
+            FormRegister frm = new FormRegister();
+            frm.ShowDialog(); // Mở form đăng ký lên
         }
 
         private void BtnLogin_Click(object sender, EventArgs e)
